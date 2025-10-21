@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Scaffolding.NET/Scaffolding.NET.csproj" />
+  <Project Path="tests\Scaffolding.NET.Tests\Scaffolding.NET.Tests.csproj" Type="Classic C#" />
+</Solution>
