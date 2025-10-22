@@ -1,7 +1,7 @@
 ﻿using System.Buffers.Binary;
 using System.Text;
 
-namespace Scaffolding.NET;
+namespace Scaffolding.NET.Packet;
 
 public struct ScaffoldingClientPacket()
 {

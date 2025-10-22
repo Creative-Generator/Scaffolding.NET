@@ -1,6 +1,6 @@
 ﻿using System.Buffers.Binary;
 
-namespace Scaffolding.NET;
+namespace Scaffolding.NET.Packet;
 
 public struct ScaffoldingServerPacket
 {
