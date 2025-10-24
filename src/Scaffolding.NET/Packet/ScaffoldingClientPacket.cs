@@ -12,7 +12,7 @@ public struct ScaffoldingClientPacket()
 
     public ScaffoldingClientPacket(string requestType, byte[] data) : this()
     {
-        if (RequestType.Length > 255)
+        if (requestType.Length > 255)
         {
             throw new ArgumentException("请求类型长度不能大于 255。", nameof(requestType));
         }
