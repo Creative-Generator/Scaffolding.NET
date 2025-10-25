@@ -70,10 +70,12 @@ public static class MinecraftProtocolHelper
                     return 0;
                 }
 
+                client.DropMulticastGroup(group);
                 return port;
             }
             catch (OperationCanceledException)
             {
+                client.DropMulticastGroup(group);
                 break;
             }
         }
