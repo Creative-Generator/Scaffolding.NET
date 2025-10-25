@@ -1,10 +1,11 @@
 ﻿using JetBrains.Annotations;
 using Scaffolding.NET.Helper;
+using Scaffolding.NET.Room;
 
 namespace Scaffolding.NET.Tests.Helper;
 
 [TestSubject(typeof(RoomIdHelper))]
-public class RoomIdHelperTest
+public class RoomIdHelperTest(ITestOutputHelper output)
 {
 
     [Theory]
@@ -23,6 +24,8 @@ public class RoomIdHelperTest
     [Fact]
     public void TestGenerateRoomId()
     {
-        Assert.True(RoomIdHelper.IsValidRoomId(RoomIdHelper.GenerateRoomId()));
+        var roomId = RoomIdHelper.GenerateRoomId();
+        output.WriteLine(roomId);
+        Assert.True(RoomIdHelper.IsValidRoomId(roomId));
     } 
 }
