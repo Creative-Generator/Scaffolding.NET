@@ -1,8 +1,8 @@
 ﻿namespace Scaffolding.NET;
 
-public class ScaffoldingServer : IDisposable
+public class ScaffoldingServer : IAsyncDisposable
 {
-    public void Dispose()
+    public ValueTask DisposeAsync()
     {
         throw new NotImplementedException();
     }

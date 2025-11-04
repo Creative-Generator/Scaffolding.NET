@@ -1,5 +1,4 @@
 ﻿using JetBrains.Annotations;
-using Scaffolding.NET.Extensions.MachineId;
 
 namespace Scaffolding.NET.Extensions.MachineId.Tests;
 
@@ -8,8 +7,8 @@ public class MachineIdHelperTest(ITestOutputHelper output)
 {
 
     [Fact]
-    public void TestMachineId()
+    public async Task TestMachineId()
     {
-        output.WriteLine(MachineIdHelper.GetMachineId());
+        output.WriteLine(await MachineIdHelper.GetMachineIdAsync());
     }
 }

@@ -4,12 +4,18 @@ using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Scaffolding.NET.Extensions.MachineId;
 
 public static class MachineIdHelper
 {
     private static IMachineIdProvider? _machineIdProvider;
+    
+    public static async Task<string> GetMachineIdAsync()
+    {
+        return await Task.Run(GetMachineId);
+    }
     
     public static string GetMachineId()
     {

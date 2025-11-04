@@ -1,6 +1,9 @@
 <Solution>
+  <Project Path="src/Scaffolding.NET.Extensions.EasyTier/Scaffolding.NET.Extensions.EasyTier.csproj" />
   <Project Path="src/Scaffolding.NET.Extensions.MachineId/Scaffolding.NET.Extensions.MachineId.csproj" />
+  <Project Path="src/Scaffolding.NET.Extensions.Minecraft/Scaffolding.NET.Extensions.Minecraft.csproj" />
   <Project Path="src/Scaffolding.NET/Scaffolding.NET.csproj" />
-  <Project Path="tests/Scaffolding.NET.Extensions.MachineId.Tests\Scaffolding.NET.Extensions.MachineId.Tests.csproj" />
-  <Project Path="tests/Scaffolding.NET.Tests\Scaffolding.NET.Tests.csproj" />
+  <Project Path="tests/Scaffolding.NET.Extensions.MachineId.Tests/Scaffolding.NET.Extensions.MachineId.Tests.csproj" />
+  <Project Path="tests/Scaffolding.NET.Tests/Scaffolding.NET.Tests.csproj" />
+  <Project Path="tests/Scaffolding.NET.Extensions.Minecraft.Tests/Scaffolding.NET.Extensions.Minecraft.Tests.csproj" />
 </Solution>

@@ -1,53 +1,62 @@
 ﻿using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using Scaffolding.NET.EasyTier;
 
 namespace Scaffolding.NET.Extensions.EasyTier;
 
 public static class EasyTierManager
 {
-    /// <summary>
-    /// 存放 EasyTier 的地址。
-    /// Windows 上默认为 %localappdata%\easytier，macOS/Linux 上默认为 /usr/share/easytier。
-    /// </summary>
-    public static string EasyTierFolderPath { get; set; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "easytier");
+    public static EasyTierFileInfo? FileInfo { get; set; } = new();
+
+    
 
     /// <summary>
-    /// EasyTier 主程序的名字。
-    /// Windows 上默认为 easytier-core.exe，macOS/Linux 上默认为 easytier-core。
+    /// 获取最新版本的 EasyTier 下载链接。
     /// </summary>
-    public static string EasyTierCoreName { get; set; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-        ? "easytier-core.exe"
-        : "easytier-core";
-
-    /// <summary>
-    /// EasyTier CLI 的名字。
-    /// Windows 上默认为 easytier-cli.exe，macOS/Linux 上默认为 easytier-cli。
-    /// </summary>
-    public static string EasyTierCliName { get; set; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-        ? "easytier-cli.exe"
-        : "easytier-cli";
-
-    /// <summary>
-    /// EasyTier 的依赖 Packet 的名字。
-    /// 只在 Windows 上有效，默认为 Packet.dll。
-    /// </summary>
-    public static string EasyTierPacketLibraryName { get; set; } = "Packet.dll";
-
-    /// <summary>
-    /// 检查 EasyTier 环境。
-    /// </summary>
-    /// <returns>如果环境正常，返回 true，否则返回 false。</returns>
-    public static bool CheckEasyTierEnvironment()
+    /// <returns>EasyTier 下载链接。</returns>
+    public static string GetLatestEasyTierDownloadUrl()
     {
-        if (!(File.Exists(Path.Combine(EasyTierFolderPath, EasyTierCoreName)) &&
-              File.Exists(Path.Combine(EasyTierFolderPath, EasyTierCliName))))
+        var arch = RuntimeInformation.ProcessArchitecture switch
         {
-            return (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ||
-                    !File.Exists(Path.Combine(EasyTierFolderPath, EasyTierPacketLibraryName))) && false;
+            Architecture.X86 when RuntimeInformation.IsOSPlatform(OSPlatform.Windows) => "i686",
+            Architecture.X64 => "x86_64",
+            Architecture.Arm when RuntimeInformation.IsOSPlatform(OSPlatform.Linux) => "arm",
+            Architecture.Arm64 => "aarch64",
+#if NET8_0_OR_GREATER
+            Architecture.LoongArch64 when RuntimeInformation.IsOSPlatform(OSPlatform.Linux) => "loongarch64",
+#endif
+#if NET9_0_OR_GREATER
+            Architecture.RiscV64 when RuntimeInformation.IsOSPlatform(OSPlatform.Linux) => "riscv64",
+#endif
+            _ => throw new NotSupportedException("不支持的架构。")
+        };
+
+        string os;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            os = "windows";
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            os = "linux";
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            os = "macos";
+        }
+#if NET6_0_OR_GREATER
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.FreeBSD))
+        {
+            if (arch != "x86_64") throw new NotSupportedException("不支持的架构。");
+            os = "freebsd";
+        }
+#endif
+        else
+        {
+            throw new NotSupportedException("不支持的操作系统。");
         }
 
-        return true;
+        throw new NotImplementedException();
     }
 }

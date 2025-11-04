@@ -2,14 +2,14 @@
 
 namespace Scaffolding.NET.Packet;
 
-public struct ScaffoldingServerPacket
+public struct ScaffoldingResponsePacket
 {
-    public ScaffoldingServerPacket(ReadOnlyMemory<byte> source)
+    public ScaffoldingResponsePacket(ReadOnlyMemory<byte> source)
     {
         Source = source;
     }
 
-    public ScaffoldingServerPacket(byte responseStatus, byte[] data)
+    public ScaffoldingResponsePacket(byte responseStatus, byte[] data)
     {
         var totalLength = 1 + 4 + data.Length;
 

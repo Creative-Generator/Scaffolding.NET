@@ -44,12 +44,12 @@ public static class RoomIdHelper
     /// <returns>房间码。</returns>
     internal static string GenerateRoomId()
     {
-        var roomId = string.Empty;
+        string roomId;
         do
         {
             roomId =
                 $"U/{CreateRandomString(4)}-{CreateRandomString(4)}-{CreateRandomString(4)}-{CreateRandomString(4)}";
-        } while (IsValidRoomId(roomId));
+        } while (!IsValidRoomId(roomId));
 
         return roomId;
     }

@@ -3,14 +3,14 @@ using System.Text;
 
 namespace Scaffolding.NET.Packet;
 
-public struct ScaffoldingClientPacket()
+public struct ScaffoldingRequestPacket()
 {
-    public ScaffoldingClientPacket(ReadOnlyMemory<byte> source) : this()
+    public ScaffoldingRequestPacket(ReadOnlyMemory<byte> source) : this()
     {
         Source = source;
     }
 
-    public ScaffoldingClientPacket(string requestType, byte[] data) : this()
+    public ScaffoldingRequestPacket(string requestType, byte[] data) : this()
     {
         if (requestType.Length > 255)
         {
