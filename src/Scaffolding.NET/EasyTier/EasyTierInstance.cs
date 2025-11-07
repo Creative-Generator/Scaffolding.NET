@@ -34,7 +34,10 @@ internal sealed class EasyTierInstance
             {
                 FileName = Path.Combine(_fileInfo.EasyTierFolderPath, _fileInfo.EasyTierCoreName),
                 WorkingDirectory = _fileInfo.EasyTierFolderPath,
-                WindowStyle = ProcessWindowStyle.Hidden
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,         
+                UseShellExecute = false 
             }
         };
 
@@ -59,7 +62,7 @@ internal sealed class EasyTierInstance
     {
         if (startInfo.NetworkName is null) throw new ArgumentNullException(nameof(startInfo.NetworkName));
         if (startInfo.NetworkSecret is null) throw new ArgumentNullException(nameof(startInfo.NetworkSecret));
-        if (startInfo.Ipv4Address is null || !startInfo.Dhcp)
+        if (startInfo.Ipv4Address is null && !startInfo.Dhcp)
             throw new InvalidCastException("在未设置 DHCP 情况下必须设置 IPv4 地址。");
 
         var argsBuilder = new ArgumentsBuilder();
@@ -76,17 +79,22 @@ internal sealed class EasyTierInstance
             .Add("default-protocol", startInfo.DefaultProtocol.ToString().ToLowerInvariant())
             .Add("network-name", startInfo.NetworkName)
             .Add("network-secret", startInfo.NetworkSecret)
-            .Add("relay-network-whitelist", startInfo.NetworkName)
+            //.Add("relay-network-whitelist", startInfo.NetworkName)
             .AddIf(startInfo.MachineId is not null, "machine-id", startInfo.MachineId!)
             .Add("rpc-portal", _rpcPort.ToString())
             .Add("hostname", startInfo.HostName)
-            .Add("ipv4", startInfo.Ipv4Address.ToString())
             .AddFlagIf(startInfo.Ipv4Address is null || startInfo.Dhcp, "dhcp")
             .Add("l", "tcp://0.0.0.0:0")
             .Add("l", "udp://0.0.0.0:0")
             .AddIf(!startInfo.RelayForOthers, "private-mode", "true")
-            .AddIf(startInfo.DisableP2P, "disable-p2p", "true");
+            .AddIf(startInfo.DisableP2P, "disable-p2p", "true")
+            .Add("private-mode", "true");
 
+        if (startInfo.Ipv4Address is not null)
+        {
+            argsBuilder.Add("ipv4", startInfo.Ipv4Address.ToString());
+        }
+        
         if (startInfo.TcpWhiteList is not null)
         {
             foreach (var whitelist in startInfo.TcpWhiteList)
@@ -133,7 +141,7 @@ internal sealed class EasyTierInstance
         List<string> officialNodes = ["tcp://public.easytier.cn:11010", "tcp://public2.easytier.cn:54321"];
 
         using var httpClient = new HttpClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(5);
+        httpClient.Timeout = TimeSpan.FromSeconds(10);
         httpClient.BaseAddress = new Uri("https://uptime.easytier.cn");
 
         using var response = await httpClient.GetAsync("api/nodes?page=1&per_page=10000&is_active=true", cancellationToken);
@@ -167,7 +175,7 @@ internal sealed class EasyTierInstance
 
     public async Task<List<EasyTierPeerInfo>> GetEasyTierPeerInfosAsync()
     {
-        var json = await CallEasyTierCliAsync("-o json peers");
+        var json = await CallEasyTierCliAsync("-o json peer");
 
 #if NET6_0_OR_GREATER
         return JsonSerializer.Deserialize(json!, EasyTierPeerInfoContext.Default.ListEasyTierPeerInfo)!;
@@ -178,13 +186,14 @@ internal sealed class EasyTierInstance
 
     internal async Task<ushort> SetPortForwardAsync(IPAddress targetIp, ushort targetPort)
     {
-        var tcpLocalPort = GetTcpAvailablePort();
-        var udpLocalPort = GetUdpAvailablePort();
+        var localPort = GetTcpAvailablePort();
 
-        await CallEasyTierCliAsync($"add tcp 127.0.0.1:{tcpLocalPort} {targetIp}:{targetPort}", false);
-        await CallEasyTierCliAsync($"add udp 127.0.0.1:{udpLocalPort} {targetIp}:{targetPort}", false);
+        await CallEasyTierCliAsync($"port-forward add tcp 127.0.0.1:{localPort} {targetIp}:{targetPort}", false);
+        await CallEasyTierCliAsync($"port-forward add udp 127.0.0.1:{localPort} {targetIp}:{targetPort}", false);
+        await CallEasyTierCliAsync($"port-forward add tcp [::]:{localPort} {targetIp}:{targetPort}", false);
+        await CallEasyTierCliAsync($"port-forward add udp [::]:{localPort} {targetIp}:{targetPort}", false);
 
-        return tcpLocalPort;
+        return localPort;
     }
 
     public async Task<string?> CallEasyTierCliAsync(string arguments, bool getOutput = true)
@@ -218,18 +227,16 @@ internal sealed class EasyTierInstance
 
         process.Start();
 
+        var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false) +
+                           await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+        
 #if NET6_0_OR_GREATER
         await process.WaitForExitAsync().ConfigureAwait(false);
 #else
         await tcs.Task.ConfigureAwait(false);
 #endif
-        if (getOutput)
-        {
-            return await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false) +
-                   await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-        }
-
-        return null;
+        
+        return getOutput ? output : null;
     }
 
     private static ushort GetTcpAvailablePort()

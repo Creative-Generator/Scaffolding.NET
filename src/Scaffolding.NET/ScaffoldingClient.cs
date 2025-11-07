@@ -58,13 +58,16 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         // 启动 EasyTier
         options.EasyTierStartInfo ??= new EasyTierStartInfo();
         
-        options.EasyTierStartInfo.NetworkName = $"scaffolding-mc-{options.MachineId[2..11]}";
-        options.EasyTierStartInfo.NetworkSecret = options.MachineId[12..21];
+        options.EasyTierStartInfo.NetworkName = $"scaffolding-mc-{options.RoomId[2..11]}";
+        options.EasyTierStartInfo.NetworkSecret = options.RoomId[12..21];
         options.EasyTierStartInfo.MachineId = options.MachineId;
-        options.EasyTierStartInfo.Dhcp = true;
+        options.EasyTierStartInfo.TcpWhiteList = ["0"];
+        options.EasyTierStartInfo.UdpWhiteList = ["0"];
 
         await client._easyTierInstance.StartAsync(options.EasyTierStartInfo, cancellationToken);
-
+        
+        await Task.Delay(5000, cancellationToken);
+        
         // 将节点信息转成玩家信息
         var peerInfos = await client._easyTierInstance.GetEasyTierPeerInfosAsync();
 
@@ -81,21 +84,26 @@ public sealed class ScaffoldingClient : IAsyncDisposable
             playerInfos.Add(playerInfo);
         }
 
+        if (host is null)
+        {
+            throw new InvalidCastException("未找到房主。");
+        }
+
         // 创建房间信息
         client.RoomInfo = new ScaffoldingRoomInfo
         {
-            Host = host!,
+            Host = host,
             PlayerInfos = playerInfos.AsReadOnly()
         };
 
-        if (!ushort.TryParse(host!.HostName[22..], out var scaffoldingPort))
+        if (!ushort.TryParse(host.HostName[22..], out var scaffoldingPort))
         {
             client._easyTierInstance.Stop();
             throw new InvalidCastException("房主的主机名非法。");
         }
 
         // 连接远端 TCP
-        var localPort = await client._easyTierInstance.SetPortForwardAsync(host.Ip, scaffoldingPort);
+        var localPort = await client._easyTierInstance.SetPortForwardAsync(host.Ip!, scaffoldingPort);
         await client._tcpClient.ConnectAsync(
             IPAddress.Loopback,
             localPort
@@ -131,6 +139,13 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 
         _heartbeatCts = new CancellationTokenSource();
         _heartbeatTask = HeartbeatLoopAsync(_heartbeatCts.Token);
+        
+        var serverPortPack = new ScaffoldingRequestPacket("c:server_port", []);
+        var mcPortResponse = await SendRequestAsync(serverPortPack);
+        if (mcPortResponse.ResponseStatus == 0)
+        {
+            RoomInfo.ServerPort = BinaryPrimitives.ReadUInt16BigEndian(mcPortResponse.Data.Span);
+        }
     }
     
     private async Task ReceiveLoopAsync(PipeReader reader)
@@ -143,7 +158,7 @@ public sealed class ScaffoldingClient : IAsyncDisposable
                 var buffer = result.Buffer;
 
                 var consumed = buffer.Start; // 已经处理的数据的位置
-                var examined = buffer.End;   // 当前位置
+                var examined = buffer.End;   // 已经查看过的位置
                 
                 try
                 {
@@ -189,14 +204,14 @@ public sealed class ScaffoldingClient : IAsyncDisposable
                 await SendRequestAsync(_playerPingPacket);
                 _heartbeatStopwatch.Stop();
 
-                var latency = _heartbeatStopwatch.ElapsedMilliseconds;
+                // var latency = _heartbeatStopwatch.ElapsedMilliseconds;
                 _heartbeatStopwatch.Reset();
             }
             catch (OperationCanceledException)
             {
                 break;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 break;
             }
