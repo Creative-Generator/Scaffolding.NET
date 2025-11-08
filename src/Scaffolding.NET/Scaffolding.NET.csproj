@@ -27,6 +27,7 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
     <PackageReference Include="Required" Version="1.0.0" PrivateAssets="all" />
+    <PackageReference Include="System.Text.Json" Version="8.0.6" />
     <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
   </ItemGroup>
 

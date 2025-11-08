@@ -10,7 +10,7 @@ public class EasyTierInstanceTest(ITestOutputHelper output)
     [Fact]
     public async Task TestGetEasyTierNodesAsync()
     {
-        var result = await EasyTierInstance.GetEasyTierNodesAsync();
+        var result = await EasyTierInstance.GetEasyTierNodesAsync(TestContext.Current.CancellationToken);
         foreach (var item in result)
         {
             output.WriteLine(item);

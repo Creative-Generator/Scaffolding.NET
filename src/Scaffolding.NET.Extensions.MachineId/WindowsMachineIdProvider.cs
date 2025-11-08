@@ -1,9 +1,15 @@
 ﻿using System;
 using System.Linq;
 using System.Management;
+#if NET6_0_OR_GREATER
+using System.Runtime.Versioning;
+#endif
 
 namespace Scaffolding.NET.Extensions.MachineId;
 
+#if NET6_0_OR_GREATER
+[SupportedOSPlatform("windows")]
+#endif
 internal sealed class WindowsMachineIdProvider : IMachineIdProvider
 {
     public string? GetBiosUuid()

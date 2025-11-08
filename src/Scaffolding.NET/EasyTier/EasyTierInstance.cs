@@ -13,7 +13,7 @@ internal sealed class EasyTierInstance
     private readonly EasyTierFileInfo _fileInfo;
     private readonly Process? _process;
     private readonly int _rpcPort;
-
+    
     public bool IsRunning => _process?.HasExited == false;
 
     public event EventHandler? Exited;
@@ -34,10 +34,8 @@ internal sealed class EasyTierInstance
             {
                 FileName = Path.Combine(_fileInfo.EasyTierFolderPath, _fileInfo.EasyTierCoreName),
                 WorkingDirectory = _fileInfo.EasyTierFolderPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,         
-                UseShellExecute = false 
+                UseShellExecute = false,
+                CreateNoWindow = true
             }
         };
 
@@ -49,11 +47,11 @@ internal sealed class EasyTierInstance
         _process!.StartInfo.Arguments = await BuildArgumentsAsync(startInfo, cancellationToken);
 
         _process.Exited += Exited;
-
+        
         return _process.Start();
     }
 
-    public async void Stop()
+    public void Stop()
     {
         _process!.Kill();
     }
@@ -133,41 +131,51 @@ internal sealed class EasyTierInstance
             argsBuilder.Add("peers", node);
         }
 
-        return argsBuilder.GetResult();
+        var result = argsBuilder.GetResult();
+        DebugHelper.WriteLine($"EasyTier 参数: {result}");
+        return result;
     }
 
     internal static async Task<List<string>> GetEasyTierNodesAsync(CancellationToken cancellationToken = default)
     {
         List<string> officialNodes = ["tcp://public.easytier.cn:11010", "tcp://public2.easytier.cn:54321"];
-
-        using var httpClient = new HttpClient();
-        httpClient.Timeout = TimeSpan.FromSeconds(10);
-        httpClient.BaseAddress = new Uri("https://uptime.easytier.cn");
-
-        using var response = await httpClient.GetAsync("api/nodes?page=1&per_page=10000&is_active=true", cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var root = json.RootElement;
-
-        var success = root.GetProperty("success").GetBoolean();
-        if (!success) return officialNodes;
-
-        var items = root.GetProperty("data").GetProperty("items").EnumerateArray().ToArray();
-
-        var rand = new Random();
-        var total = root.GetProperty("data").GetProperty("total").GetInt32();
-
         var nodes = new List<string>(7);
         nodes.AddRange(officialNodes);
-
-        for (var i = 0; i < 5; i++)
+        
+        try
         {
-            var index = rand.Next(0, total);
-            var protocol = items[index].GetProperty("protocol").GetString();
-            var host = items[index].GetProperty("host").GetString();
+            using var httpClient = new HttpClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(10);
+            httpClient.BaseAddress = new Uri("https://uptime.easytier.cn");
 
-            nodes.Add($"{protocol}://{host}");
+            using var response =
+                await httpClient.GetAsync("api/nodes?page=1&per_page=10000&is_active=true", cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var root = json.RootElement;
+
+            var success = root.GetProperty("success").GetBoolean();
+            if (!success) return officialNodes;
+
+            var items = root.GetProperty("data").GetProperty("items").EnumerateArray().ToArray();
+
+            var rand = new Random();
+            var total = root.GetProperty("data").GetProperty("total").GetInt32();
+
+            for (var i = 0; i < 5; i++)
+            {
+                var index = rand.Next(0, total);
+                var protocol = items[index].GetProperty("protocol").GetString();
+                var host = items[index].GetProperty("host").GetString();
+                var port = items[index].GetProperty("port").GetString();
+
+                nodes.Add($"{protocol}://{host}:{port}");
+            }
+        }
+        catch (Exception)
+        {
+            // 不处理
         }
 
         return nodes.Distinct().ToList();

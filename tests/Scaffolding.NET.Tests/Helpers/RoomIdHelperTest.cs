@@ -1,7 +1,7 @@
 ﻿using JetBrains.Annotations;
 using Scaffolding.NET.Room;
 
-namespace Scaffolding.NET.Tests.Helper;
+namespace Scaffolding.NET.Tests.Helpers;
 
 [TestSubject(typeof(RoomIdHelper))]
 public class RoomIdHelperTest(ITestOutputHelper output)

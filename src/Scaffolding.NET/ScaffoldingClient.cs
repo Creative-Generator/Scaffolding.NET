@@ -4,8 +4,11 @@ using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Scaffolding.NET.EasyTier;
 using Scaffolding.NET.Helpers;
@@ -18,27 +21,31 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 {
     private TcpClient _tcpClient;
     private EasyTierInstance _easyTierInstance;
-    private PipeReader _pipeReader = null!;
-    private PipeWriter _pipeWriter = null!;
+    private Pipe _pipe;
     private Channel<ScaffoldingResponsePacket> _responseChannel;
-    private Task? _receiveTask;
-    private Task? _heartbeatTask;
+    private CancellationTokenSource? _pipeCts;
     private CancellationTokenSource? _heartbeatCts;
+    private bool _isDisposed;
     private readonly Stopwatch _heartbeatStopwatch = new();
     private readonly ScaffoldingRequestPacket _playerPingPacket;
+    private readonly SemaphoreSlim _lock = new(1, 1);
+
+    private const string SupportedProtocols =
+        "c:ping\0c:protocols\0c:server_port\0c:player_ping\0c:player_profiles_list\0c:player_easytier_id";
 
     public ScaffoldingClientOptions Options { get; init; }
-    public ScaffoldingRoomInfo RoomInfo { get; private set; } = null!;
+    public ScaffoldingRoomInfo RoomInfo { get; private set; }
 
     private ScaffoldingClient(ScaffoldingClientOptions options)
     {
         Options = options;
-        
+
         _tcpClient = new TcpClient();
         _easyTierInstance = new EasyTierInstance(options.EasyTierFileInfo);
-
         _responseChannel = Channel.CreateUnbounded<ScaffoldingResponsePacket>();
-        
+        _pipe = new Pipe();
+        RoomInfo = new ScaffoldingRoomInfo();
+
         var json = new JsonObject
         {
             ["name"] = options.PlayerName,
@@ -48,16 +55,17 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         var data = Encoding.UTF8.GetBytes(json.ToJsonString());
         _playerPingPacket = new ScaffoldingRequestPacket("c:player_ping", data);
     }
-    
-    public static async ValueTask<ScaffoldingClient> ConnectAsync(ScaffoldingClientOptions options, CancellationToken cancellationToken = default)
+
+    public static async ValueTask<ScaffoldingClient> ConnectAsync(ScaffoldingClientOptions options,
+        CancellationToken cancellationToken = default)
     {
         if (!RoomIdHelper.IsValidRoomId(options.RoomId)) throw new ArgumentException("非法房间码。");
-        
+
         var client = new ScaffoldingClient(options);
 
         // 启动 EasyTier
         options.EasyTierStartInfo ??= new EasyTierStartInfo();
-        
+
         options.EasyTierStartInfo.NetworkName = $"scaffolding-mc-{options.RoomId[2..11]}";
         options.EasyTierStartInfo.NetworkSecret = options.RoomId[12..21];
         options.EasyTierStartInfo.MachineId = options.MachineId;
@@ -65,197 +73,286 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         options.EasyTierStartInfo.UdpWhiteList = ["0"];
 
         await client._easyTierInstance.StartAsync(options.EasyTierStartInfo, cancellationToken);
-        
-        await Task.Delay(5000, cancellationToken);
-        
+
         // 将节点信息转成玩家信息
-        var peerInfos = await client._easyTierInstance.GetEasyTierPeerInfosAsync();
+        var host = await client.GetHostAsync();
 
-        var playerInfos = new List<ScaffoldingPlayerInfo>(peerInfos.Count);
-        ScaffoldingPlayerInfo? host = null;
-        foreach (var playerInfo in peerInfos.Select(PlayerInfoHelper.ConvertEasyTierPeerInfoToScaffoldingPlayerInfo))
-        {
-            if (playerInfo.IsHost)
-            {
-                if (host is not null) throw new InvalidCastException("同一房间中出现多个房主。");
-                host = playerInfo;
-            }
-            
-            playerInfos.Add(playerInfo);
-        }
+        DebugHelper.WriteLine($"找到房主，HostName: {host.Hostname} , IP: {host.Ipv4}");
 
-        if (host is null)
-        {
-            throw new InvalidCastException("未找到房主。");
-        }
 
-        // 创建房间信息
-        client.RoomInfo = new ScaffoldingRoomInfo
-        {
-            Host = host,
-            PlayerInfos = playerInfos.AsReadOnly()
-        };
-
-        if (!ushort.TryParse(host.HostName[22..], out var scaffoldingPort))
+        if (!ushort.TryParse(host.Hostname[22..], out var scaffoldingPort))
         {
             client._easyTierInstance.Stop();
             throw new InvalidCastException("房主的主机名非法。");
         }
 
         // 连接远端 TCP
-        var localPort = await client._easyTierInstance.SetPortForwardAsync(host.Ip!, scaffoldingPort);
+        var localPort = await client._easyTierInstance.SetPortForwardAsync(IPAddress.Parse(host.Ipv4), scaffoldingPort);
+        DebugHelper.WriteLine($"本地端口: {localPort}");
         await client._tcpClient.ConnectAsync(
             IPAddress.Loopback,
             localPort
 #if NET6_0_OR_GREATER
-            ,cancellationToken
+            , cancellationToken
 #endif
-            );
+        );
+        DebugHelper.WriteLine("TcpClient 成功连接目标服务器");
 
-        // Pipe 配置
-        var stream = client._tcpClient.GetStream();
-        client._pipeReader = PipeReader.Create(stream);
-        client._pipeWriter = PipeWriter.Create(stream);
+        // Pipe 有关的 Task
+        client._pipeCts = new CancellationTokenSource();
+        _ = client.ReadPipeAsync(client._pipe.Reader, client._pipeCts.Token);
+        _ = client.FillPipeAsync(client._pipe.Writer, client._pipeCts.Token);
 
-        // 接收消息
-        client._receiveTask = client.ReceiveLoopAsync(client._pipeReader);
-        
         // Scaffolding 协议握手
-        await client.HandshakeAsync();
-        
+        await client.HandshakeAsync(host);
+
+        // 心跳包循环
+        client._heartbeatCts = new CancellationTokenSource();
+        _ = client.HeartbeatLoopAsync(client._heartbeatCts.Token);
+
         return client;
+    }
+
+    private async Task<EasyTierPeerInfo> GetHostAsync()
+    {
+        EasyTierPeerInfo? host = null;
+
+        // 重试 10 次
+        for (var i = 0; i < 10; i++)
+        {
+            var peerInfos = await _easyTierInstance.GetEasyTierPeerInfosAsync();
+            foreach (var peerInfo in peerInfos.Where(peerInfo =>
+                         peerInfo.Hostname.StartsWith("scaffolding-mc-server", StringComparison.Ordinal)))
+            {
+                if (host is not null) throw new InvalidCastException("同一房间中出现多个房主。");
+                host = peerInfo;
+            }
+
+            if (host is not null) break;
+            await Task.Delay(1000);
+        }
+
+        return host ?? throw new InvalidCastException("找不到房主。");
     }
 
     public async Task<ScaffoldingResponsePacket> SendRequestAsync(ScaffoldingRequestPacket packet)
     {
-        await _pipeWriter.WriteAsync(packet.Source);
+        ScaffoldingResponsePacket response;
 
-        return await _responseChannel.Reader.ReadAsync();
+        await _lock.WaitAsync();
+        try
+        {
+            var stream = _tcpClient.GetStream();
+
+#if NET6_0_OR_GREATER
+            await stream.WriteAsync(packet.Source);
+#else
+            if (!MemoryMarshal.TryGetArray(packet.Source, out var segment))
+                throw new InvalidOperationException("包缓冲区不由数组支持。");
+            await stream.WriteAsync(segment.Array, segment.Offset, segment.Count);
+#endif
+            DebugHelper.WriteLine($"发送了 {packet.RequestType} 请求");
+            
+            response = await _responseChannel.Reader.ReadAsync();
+            DebugHelper.WriteLine($"收到了响应码为 {response.ResponseStatus} 的响应");
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        return response;
     }
 
-    private async Task HandshakeAsync()
+    private async Task HandshakeAsync(EasyTierPeerInfo host)
     {
+        DebugHelper.WriteLine("开始握手");
+        // 发送第一个心跳包
         await SendRequestAsync(_playerPingPacket);
 
-        _heartbeatCts = new CancellationTokenSource();
-        _heartbeatTask = HeartbeatLoopAsync(_heartbeatCts.Token);
-        
-        var serverPortPack = new ScaffoldingRequestPacket("c:server_port", []);
-        var mcPortResponse = await SendRequestAsync(serverPortPack);
-        if (mcPortResponse.ResponseStatus == 0)
-        {
-            RoomInfo.ServerPort = BinaryPrimitives.ReadUInt16BigEndian(mcPortResponse.Data.Span);
-        }
+        // 协商支持的协议
+        var supportedProtocolsRequest =
+            new ScaffoldingRequestPacket("c:protocols", Encoding.UTF8.GetBytes(SupportedProtocols));
+        var supportedProtocolsResponse = await SendRequestAsync(supportedProtocolsRequest);
+        var supportedProtocolsStr = Encoding.UTF8.GetString(supportedProtocolsResponse.Data.ToArray());
+        RoomInfo.SupportedRequest = supportedProtocolsStr.Split('\0');
+        DebugHelper.WriteLine($"服务器支持的协议：{supportedProtocolsStr.Replace('\0', ' ')}");
+
+        // 获取 MC 端口
+        var serverPortRequest = new ScaffoldingRequestPacket("c:server_port", []);
+        var mcPortResponse = await SendRequestAsync(serverPortRequest);
+        var port = BinaryPrimitives.ReadUInt16BigEndian(mcPortResponse.Data.Span);
+        if (mcPortResponse.ResponseStatus != 0) throw new InvalidCastException("获取服务器 MC 端口失败");
+        DebugHelper.WriteLine($"获取到服务器 MC 端口：{port}");
+
+        // 转发服务器 MC 端口转发到本地端口
+        var localPort = await _easyTierInstance.SetPortForwardAsync(IPAddress.Parse(host.Ipv4), port);
+        RoomInfo.Port = localPort;
+        DebugHelper.WriteLine($"开始将服务器 MC 端口转发到本地端口 {localPort}");
+
+        // 获取玩家列表
+        RoomInfo.PlayerInfos = await GetPlayerListAsync();
+
+        DebugHelper.WriteLine("握手结束");
     }
-    
-    private async Task ReceiveLoopAsync(PipeReader reader)
+
+    private async Task FillPipeAsync(PipeWriter writer, CancellationToken cancellationToken = default)
     {
+        var stream = _tcpClient.GetStream();
+
         try
         {
             while (true)
             {
-                var result = await reader.ReadAsync();
-                var buffer = result.Buffer;
+                // 从 PipeWriter 获取内存块
+                var memory = writer.GetMemory(512);
 
-                var consumed = buffer.Start; // 已经处理的数据的位置
-                var examined = buffer.End;   // 已经查看过的位置
-                
-                try
-                {
-                    if (TryParseResponse(ref buffer, out ScaffoldingResponsePacket response))
-                    {
-                        consumed = buffer.Start;
-                        examined = consumed;
+                // 从网络读取
+#if NET6_0_OR_GREATER
+                var bytesRead = await stream.ReadAsync(memory, cancellationToken);
+#else
+                if (!MemoryMarshal.TryGetArray(memory, out ArraySegment<byte> segment))
+                    throw new InvalidOperationException("数据包缓冲区不由数组支持。");
+                var bytesRead =
+                    await stream.ReadAsync(segment.Array!, segment.Offset, segment.Count, cancellationToken);
+#endif
 
-                        await _responseChannel.Writer.WriteAsync(response);
-                    }
-                    
-                    if (result.IsCompleted)
-                    {
-                        if (buffer.Length > 0)
-                        {
-                            throw new InvalidDataException("房主发送了错误的数据。");
-                        }
+                if (bytesRead == 0)
+                    break; // 连接关闭
 
-                        break;
-                    }
-                }
-                finally
-                {
-                    reader.AdvanceTo(consumed, examined);
-                }
+                // 通知 Pipe 写入了多少字节
+                writer.Advance(bytesRead);
+
+                // 让 Reader 处理已写数据
+                var result = await writer.FlushAsync(cancellationToken);
+                if (result.IsCompleted)
+                    break;
             }
         }
         finally
         {
-            await reader.CompleteAsync();
+            await writer.CompleteAsync();
         }
     }
 
-    private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)
+    private async Task ReadPipeAsync(PipeReader reader, CancellationToken cancellationToken = default)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        while (true)
         {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            var result = await reader.ReadAsync(cancellationToken);
+            var buffer = result.Buffer;
 
-                _heartbeatStopwatch.Start();
-                await SendRequestAsync(_playerPingPacket);
-                _heartbeatStopwatch.Stop();
+            while (TryParseResponse(ref buffer, out var response))
+            {
+                await _responseChannel.Writer.WriteAsync(response, cancellationToken);
+            }
 
-                // var latency = _heartbeatStopwatch.ElapsedMilliseconds;
-                _heartbeatStopwatch.Reset();
-            }
-            catch (OperationCanceledException)
+            // 告诉 Pipe 哪些已消费、哪些保留
+            reader.AdvanceTo(buffer.Start, buffer.End);
+
+            // ReSharper disable once InvertIf
+            if (result.IsCompleted)
             {
-                break;
-            }
-            catch (Exception)
-            {
+                if (buffer.Length > 0 && !_isDisposed)
+                    throw new InvalidDataException("连接已关闭但仍有未完整数据。");
+
                 break;
             }
         }
+
+        await reader.CompleteAsync();
     }
 
     private static bool TryParseResponse(ref ReadOnlySequence<byte> buffer,
         out ScaffoldingResponsePacket response)
     {
         response = new ScaffoldingResponsePacket(null!);
+
         if (buffer.Length < 5)
-        {
             return false;
-        }
 
         Span<byte> header = stackalloc byte[5];
         buffer.Slice(0, 5).CopyTo(header);
-        
+
         var dataLength = BinaryPrimitives.ReadUInt32BigEndian(header[1..]);
-        
         var fullPacketLength = 5 + dataLength;
+
         if (buffer.Length < fullPacketLength)
-        {
             return false;
-        }
-        
+
         var packetSource = buffer.Slice(0, fullPacketLength).ToArray();
         response = new ScaffoldingResponsePacket(packetSource);
-            
-        // 将处理过的部分去除
+
+        // 去掉已处理部分
         buffer = buffer.Slice(fullPacketLength);
-        
+
         return true;
     }
-    
+
+    private async Task HeartbeatLoopAsync(CancellationToken cancellationToken = default)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                _heartbeatStopwatch.Start();
+                _ = await SendRequestAsync(_playerPingPacket);
+                _heartbeatStopwatch.Stop();
+
+                var latency = _heartbeatStopwatch.ElapsedMilliseconds;
+                RoomInfo.Latency = (int)latency;
+                _heartbeatStopwatch.Reset();
+
+                RoomInfo.PlayerInfos = await GetPlayerListAsync();
+
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task<List<ScaffoldingPlayerInfo>> GetPlayerListAsync()
+    {
+        var playerListRequest = new ScaffoldingRequestPacket("c:player_profiles_list", []);
+        var playerListResponse = await SendRequestAsync(playerListRequest);
+
+#if NET6_0_OR_GREATER
+        var json = Encoding.UTF8.GetString(playerListResponse.Data.Span);
+        return JsonSerializer.Deserialize(json, ScaffoldingPlayerInfoContext.Default.ListScaffoldingPlayerInfo)!;
+#else
+        var json = Encoding.UTF8.GetString(playerListResponse.Data.ToArray());
+        return JsonSerializer.Deserialize<List<ScaffoldingPlayerInfo>>(json)!;
+#endif
+    }
+
     public ValueTask CloseAsync()
     {
         _tcpClient.Close();
+        _heartbeatCts?.Cancel();
+        _pipeCts?.Cancel();
+        _easyTierInstance.Stop();
+
         return default;
     }
-    
+
+    ~ScaffoldingClient()
+    {
+        DisposeAsync().GetAwaiter().GetResult();
+    }
+
     public async ValueTask DisposeAsync()
     {
         await CloseAsync();
-        
+        _isDisposed = true;
+
+        GC.SuppressFinalize(this);
     }
 }
+
+#if NET6_0_OR_GREATER
+[JsonSerializable(typeof(List<ScaffoldingPlayerInfo>))]
+public partial class ScaffoldingPlayerInfoContext : JsonSerializerContext;
+#endif

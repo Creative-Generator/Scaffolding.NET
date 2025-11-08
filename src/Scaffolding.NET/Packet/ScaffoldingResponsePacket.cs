@@ -2,7 +2,7 @@
 
 namespace Scaffolding.NET.Packet;
 
-public struct ScaffoldingResponsePacket
+public readonly struct ScaffoldingResponsePacket
 {
     public ScaffoldingResponsePacket(ReadOnlyMemory<byte> source)
     {
@@ -23,7 +23,7 @@ public struct ScaffoldingResponsePacket
         BinaryPrimitives.WriteUInt32BigEndian(span.Slice(1, 4), (uint)data.Length);
 
         // 写入 Data
-        data.CopyTo(span.Slice(1 + 4));
+        data.CopyTo(span[(1 + 4)..]);
 
         Source = buffer;
     }

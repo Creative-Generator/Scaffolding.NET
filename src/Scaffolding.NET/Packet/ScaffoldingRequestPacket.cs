@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Scaffolding.NET.Packet;
 
-public struct ScaffoldingRequestPacket()
+public readonly struct ScaffoldingRequestPacket()
 {
     public ScaffoldingRequestPacket(ReadOnlyMemory<byte> source) : this()
     {
@@ -33,7 +33,7 @@ public struct ScaffoldingRequestPacket()
         BinaryPrimitives.WriteUInt32BigEndian(span.Slice(1 + typeBytes.Length, 4), (uint)data.Length);
 
         // 写入 Data
-        data.CopyTo(span.Slice(1 + typeBytes.Length + 4));
+        data.CopyTo(span[(1 + typeBytes.Length + 4)..]);
 
         Source = buffer;
     }
