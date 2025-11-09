@@ -9,7 +9,7 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        var roomId = "U/KF9E-55TL-T8Y7-PH66";
+        var roomId = "";
         var playerName = "ScaffoldingNET_Test";
         var etFolderPath = @"C:\Dev\EasyTier";
         
