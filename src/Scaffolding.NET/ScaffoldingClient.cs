@@ -19,13 +19,13 @@ namespace Scaffolding.NET;
 
 public sealed class ScaffoldingClient : IAsyncDisposable
 {
-    private TcpClient _tcpClient;
-    private EasyTierInstance _easyTierInstance;
-    private Pipe _pipe;
-    private Channel<ScaffoldingResponsePacket> _responseChannel;
     private CancellationTokenSource? _pipeCts;
     private CancellationTokenSource? _heartbeatCts;
     private bool _isDisposed;
+    private readonly TcpClient _tcpClient;
+    private readonly EasyTierInstance _easyTierInstance;
+    private readonly Pipe _pipe;
+    private readonly Channel<ScaffoldingResponsePacket> _responseChannel;
     private readonly Stopwatch _heartbeatStopwatch = new();
     private readonly ScaffoldingRequestPacket _playerPingPacket;
     private readonly SemaphoreSlim _lock = new(1, 1);

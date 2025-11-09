@@ -175,7 +175,7 @@ internal sealed class EasyTierInstance
         }
         catch (Exception)
         {
-            // 不处理
+            DebugHelper.WriteLine("调用 EasyTier API 失败，使用官方节点");
         }
 
         return nodes.Distinct().ToList();
