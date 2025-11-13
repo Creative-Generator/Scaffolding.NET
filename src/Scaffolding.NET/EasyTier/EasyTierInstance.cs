@@ -146,7 +146,7 @@ internal sealed class EasyTierInstance
         {
             using var httpClient = new HttpClient();
             httpClient.Timeout = TimeSpan.FromSeconds(10);
-            httpClient.BaseAddress = new Uri("https://uptime.easytier.cn");
+            httpClient.BaseAddress = new Uri("https://uptime.lisfox.top");
 
             using var response =
                 await httpClient.GetAsync("api/nodes?page=1&per_page=10000&is_active=true", cancellationToken);
