@@ -7,7 +7,7 @@ namespace MinimalClient;
 
 class Program
 {
-    static async Task Main(string[] args)
+    static async Task Main()
     {
         var roomId = "";
         var playerName = "ScaffoldingNET_Test";
@@ -31,7 +31,10 @@ class Program
         
         var client = await ScaffoldingClient.ConnectAsync(options);
 
-        while (true)
+        var disposed = false;
+        client.Disposed += (_, _) => disposed = true;
+        
+        while (!disposed)
         {
             
             Console.WriteLine("玩家信息:");
@@ -48,5 +51,7 @@ class Program
 
             await Task.Delay(5000);
         }
+        
+        Console.WriteLine("Client 被销毁。");
     }
 }

@@ -4,10 +4,12 @@ using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
+// ReSharper disable once RedundantUsingDirective
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+// ReSharper disable once RedundantUsingDirective
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Scaffolding.NET.EasyTier;
@@ -22,38 +24,30 @@ public sealed class ScaffoldingClient : IAsyncDisposable
     private CancellationTokenSource? _pipeCts;
     private CancellationTokenSource? _heartbeatCts;
     private bool _isDisposed;
+    private ScaffoldingRequestPacket _playerPingPacket;
     private readonly TcpClient _tcpClient;
     private readonly EasyTierInstance _easyTierInstance;
     private readonly Pipe _pipe;
     private readonly Channel<ScaffoldingResponsePacket> _responseChannel;
     private readonly Stopwatch _heartbeatStopwatch = new();
-    private readonly ScaffoldingRequestPacket _playerPingPacket;
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly ScaffoldingClientOptions _options;
 
-    private const string SupportedProtocols =
-        "c:ping\0c:protocols\0c:server_port\0c:player_ping\0c:player_profiles_list\0c:player_easytier_id";
+    private string[] _supportedProtocols =
+        ["c:ping", "c:protocols", "c:server_port", "c:player_ping", "c:player_profiles_list", "c:player_easytier_id"];
 
-    public ScaffoldingClientOptions Options { get; init; }
-    public ScaffoldingRoomInfo RoomInfo { get; private set; }
+    public ScaffoldingRoomInfo RoomInfo { get; }
+
+    public event EventHandler? Disposed;
 
     private ScaffoldingClient(ScaffoldingClientOptions options)
     {
-        Options = options;
-
+        _options = options;
         _tcpClient = new TcpClient();
         _easyTierInstance = new EasyTierInstance(options.EasyTierFileInfo);
         _responseChannel = Channel.CreateUnbounded<ScaffoldingResponsePacket>();
         _pipe = new Pipe();
         RoomInfo = new ScaffoldingRoomInfo();
-
-        var json = new JsonObject
-        {
-            ["name"] = options.PlayerName,
-            ["machine_id"] = options.MachineId,
-            ["vendor"] = options.Vendor
-        };
-        var data = Encoding.UTF8.GetBytes(json.ToJsonString());
-        _playerPingPacket = new ScaffoldingRequestPacket("c:player_ping", data);
     }
 
     public static async ValueTask<ScaffoldingClient> ConnectAsync(ScaffoldingClientOptions options,
@@ -62,6 +56,10 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         if (!RoomIdHelper.IsValidRoomId(options.RoomId)) throw new ArgumentException("非法房间码。");
 
         var client = new ScaffoldingClient(options);
+
+        client.RoomInfo.RoomId = options.RoomId;
+        client._supportedProtocols = client._supportedProtocols.Union(options.AdvancedSupportedProtocols).ToArray();
+        client._playerPingPacket = await client.GetPlayerPingPacketAsync(options, false);
 
         // 启动 EasyTier
         options.EasyTierStartInfo ??= new EasyTierStartInfo();
@@ -88,7 +86,7 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 
         // 连接远端 TCP
         var localPort = await client._easyTierInstance.SetPortForwardAsync(IPAddress.Parse(host.Ipv4), scaffoldingPort);
-        DebugHelper.WriteLine($"本地端口: {localPort}");
+        DebugHelper.WriteLine($"房主映射的本地端口: {localPort}");
         await client._tcpClient.ConnectAsync(
             IPAddress.Loopback,
             localPort
@@ -135,33 +133,46 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         return host ?? throw new InvalidCastException("找不到房主。");
     }
 
-    public async Task<ScaffoldingResponsePacket> SendRequestAsync(ScaffoldingRequestPacket packet)
-    {
-        ScaffoldingResponsePacket response;
+    public Task<ScaffoldingResponsePacket> SendRequestAsync(ScaffoldingRequestPacket packet,
+        CancellationToken cancellationToken = default) => SendRequestAsync(packet, false, cancellationToken);
 
-        await _lock.WaitAsync();
+    public async Task<ScaffoldingResponsePacket> SendRequestAsync(ScaffoldingRequestPacket packet, bool bypassCheck,
+        CancellationToken cancellationToken = default)
+    {
+        if (_isDisposed) throw new ObjectDisposedException("对象已被释放。");
+        if (!bypassCheck)
+        {
+            if (!_supportedProtocols.Contains(packet.RequestType)) throw new ArgumentException("发送了服务器不支持的请求。");
+        }
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(10)); // 10 秒超时
+
+        await _lock.WaitAsync(cts.Token);
         try
         {
             var stream = _tcpClient.GetStream();
 
 #if NET6_0_OR_GREATER
-            await stream.WriteAsync(packet.Source);
+            await stream.WriteAsync(packet.Source, cts.Token);
 #else
             if (!MemoryMarshal.TryGetArray(packet.Source, out var segment))
                 throw new InvalidOperationException("包缓冲区不由数组支持。");
-            await stream.WriteAsync(segment.Array, segment.Offset, segment.Count);
+            await stream.WriteAsync(segment.Array, segment.Offset, segment.Count, cts.Token);
 #endif
+
             DebugHelper.WriteLine($"发送了 {packet.RequestType} 请求");
-            
-            response = await _responseChannel.Reader.ReadAsync();
+
+            // 从通道读取响应
+            var response = await _responseChannel.Reader.ReadAsync(cts.Token);
             DebugHelper.WriteLine($"收到了响应码为 {response.ResponseStatus} 的响应");
+
+            return response;
         }
         finally
         {
             _lock.Release();
         }
-
-        return response;
     }
 
     private async Task HandshakeAsync(EasyTierPeerInfo host)
@@ -172,11 +183,17 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 
         // 协商支持的协议
         var supportedProtocolsRequest =
-            new ScaffoldingRequestPacket("c:protocols", Encoding.UTF8.GetBytes(SupportedProtocols));
+            new ScaffoldingRequestPacket("c:protocols", Encoding.UTF8.GetBytes(string.Join("\0", _supportedProtocols)));
         var supportedProtocolsResponse = await SendRequestAsync(supportedProtocolsRequest);
         var supportedProtocolsStr = Encoding.UTF8.GetString(supportedProtocolsResponse.Data.ToArray());
-        RoomInfo.SupportedRequest = supportedProtocolsStr.Split('\0');
+        RoomInfo.SupportedProtocols = supportedProtocolsStr.Split('\0');
         DebugHelper.WriteLine($"服务器支持的协议：{supportedProtocolsStr.Replace('\0', ' ')}");
+
+        // c:player_easytier_id 额外处理
+        if (RoomInfo.SupportedProtocols.Contains("c:player_easytier_id"))
+        {
+            _playerPingPacket = await GetPlayerPingPacketAsync(_options, true);
+        }
 
         // 获取 MC 端口
         var serverPortRequest = new ScaffoldingRequestPacket("c:server_port", []);
@@ -202,7 +219,7 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 
         try
         {
-            while (true)
+            while (!cancellationToken.IsCancellationRequested)
             {
                 // 从 PipeWriter 获取内存块
                 var memory = writer.GetMemory(512);
@@ -237,7 +254,7 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 
     private async Task ReadPipeAsync(PipeReader reader, CancellationToken cancellationToken = default)
     {
-        while (true)
+        while (!cancellationToken.IsCancellationRequested)
         {
             var result = await reader.ReadAsync(cancellationToken);
             var buffer = result.Buffer;
@@ -289,14 +306,39 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         return true;
     }
 
+    private async Task<ScaffoldingRequestPacket> GetPlayerPingPacketAsync(ScaffoldingClientOptions options,
+        bool withEasyTierNodeId)
+    {
+        var json = new JsonObject
+        {
+            ["name"] = options.PlayerName,
+            ["machine_id"] = options.MachineId,
+            ["vendor"] = options.Vendor ??
+                         $"Scaffolding.NET, EasyTier v{await options.EasyTierFileInfo.GetEasyTierVersionAsync()}"
+        };
+
+        if (withEasyTierNodeId)
+        {
+            var output = await _easyTierInstance.CallEasyTierCliAsync("node");
+            using var doc = JsonDocument.Parse(output!);
+            var peerId = doc.RootElement.GetProperty("peer_id").GetInt64();
+            json["easytier_id"] = peerId.ToString();
+        }
+
+        var data = Encoding.UTF8.GetBytes(json.ToJsonString());
+        return new ScaffoldingRequestPacket("c:player_ping", data);
+    }
+
     private async Task HeartbeatLoopAsync(CancellationToken cancellationToken = default)
     {
+        var timeoutCount = 0;
+
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 _heartbeatStopwatch.Start();
-                _ = await SendRequestAsync(_playerPingPacket);
+                _ = await SendRequestAsync(_playerPingPacket, cancellationToken);
                 _heartbeatStopwatch.Stop();
 
                 var latency = _heartbeatStopwatch.ElapsedMilliseconds;
@@ -309,6 +351,17 @@ public sealed class ScaffoldingClient : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
+                // 可能是外部取消或超时
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    timeoutCount++;
+                    DebugHelper.WriteLine($"心跳超时 ({timeoutCount}/3)");
+                    if (timeoutCount < 3) continue;
+                    DebugHelper.WriteLine("连续 3 次心跳超时，断开连接");
+                    await DisposeAsync();
+                }
+
+                // 外部主动取消
                 break;
             }
         }
@@ -328,25 +381,29 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 #endif
     }
 
-    public ValueTask CloseAsync()
-    {
-        _tcpClient.Close();
-        _heartbeatCts?.Cancel();
-        _pipeCts?.Cancel();
-        _easyTierInstance.Stop();
-
-        return default;
-    }
-
     ~ScaffoldingClient()
     {
         DisposeAsync().GetAwaiter().GetResult();
     }
 
+#pragma warning disable CS1998
     public async ValueTask DisposeAsync()
+#pragma warning restore CS1998
     {
-        await CloseAsync();
+        if (_isDisposed) return;
+
+        _tcpClient.Dispose();
+#if NET8_0_OR_GREATER
+        if (_heartbeatCts is not null) await _heartbeatCts.CancelAsync();
+        if (_pipeCts is not null) await _pipeCts.CancelAsync();
+#else
+        _heartbeatCts?.Cancel();
+        _pipeCts?.Cancel();
+#endif
+        _easyTierInstance.Stop();
         _isDisposed = true;
+
+        Disposed?.Invoke(this, EventArgs.Empty);
 
         GC.SuppressFinalize(this);
     }

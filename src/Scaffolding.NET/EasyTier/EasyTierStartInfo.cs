@@ -37,7 +37,7 @@ public record EasyTierStartInfo
     /// <summary>
     /// 机器码。
     /// </summary>
-    public string? MachineId { get; set; }
+    internal string? MachineId { get; set; }
     
     /// <summary>
     /// TCP 端口白名单。

@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Scaffolding.NET.EasyTier;
 
@@ -32,6 +33,45 @@ public record EasyTierFileInfo
     /// 只在 Windows 上有效，默认为 Packet.dll。
     /// </summary>
     public string EasyTierPacketLibraryName { get; set; } = "Packet.dll";
+    
+    /// <summary>
+    /// 获取 EasyTier Core 的版本。
+    /// </summary>
+    /// <returns>返回 EasyTier Core 的版本。</returns>
+    /// <exception cref="InvalidCastException">若未设置 EasyTier 地址与 EasyTier 主程序名，将会抛出该异常。</exception>
+    public async Task<string> GetEasyTierVersionAsync(bool includeCommit = false)
+    {
+        if (!CheckEasyTierEnvironment()) throw new InvalidCastException("EasyTier 环境异常。");
+        
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo
+        {
+            FileName = Path.Combine(EasyTierFolderPath, EasyTierCoreName),
+            Arguments = "--version",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        process.EnableRaisingEvents = true;
+            
+#if NET6_0_OR_GREATER
+#else
+        var tcs = new TaskCompletionSource<object?>();
+        process.Exited += (_, _) => tcs.TrySetResult(null);
+#endif
+
+        process.Start();
+
+        var output = await process.StandardOutput.ReadToEndAsync();
+        
+#if NET6_0_OR_GREATER
+        await process.WaitForExitAsync();
+#else
+        await tcs.Task;
+#endif
+
+        return includeCommit ? output.Split(' ')[1] : output.Split(' ')[1].Split('-')[0];
+    }
     
     /// <summary>
     /// 检查 EasyTier 环境。

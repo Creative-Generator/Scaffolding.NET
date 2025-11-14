@@ -40,6 +40,7 @@ internal sealed class EasyTierInstance
         };
 
         _rpcPort = GetTcpAvailablePort();
+        DebugHelper.WriteLine($"EasyTier RPC 端口: {_rpcPort}");
     }
 
     public async Task<bool> StartAsync(EasyTierStartInfo startInfo, CancellationToken cancellationToken = default)
@@ -235,13 +236,13 @@ internal sealed class EasyTierInstance
 
         process.Start();
 
-        var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false) +
-                           await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+        var output = await process.StandardOutput.ReadToEndAsync() +
+                           await process.StandardError.ReadToEndAsync();
         
 #if NET6_0_OR_GREATER
-        await process.WaitForExitAsync().ConfigureAwait(false);
+        await process.WaitForExitAsync();
 #else
-        await tcs.Task.ConfigureAwait(false);
+        await tcs.Task;
 #endif
         
         return getOutput ? output : null;
