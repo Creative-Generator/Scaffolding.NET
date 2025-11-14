@@ -52,6 +52,6 @@ class Program
             await Task.Delay(5000);
         }
         
-        Console.WriteLine("Client 被销毁。");
+        Console.WriteLine("Client 被释放。");
     }
 }
