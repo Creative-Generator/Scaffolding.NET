@@ -1,14 +1,14 @@
 ﻿using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+// ReSharper disable once RedundantUsingDirective
 using System.Text.Json.Serialization;
 using Scaffolding.NET.Helpers;
 
 namespace Scaffolding.NET.EasyTier;
 
-internal sealed class EasyTierInstance
+internal sealed class EasyTierInstance : IDisposable
 {
     private readonly EasyTierFileInfo _fileInfo;
     private readonly Process? _process;
@@ -39,7 +39,7 @@ internal sealed class EasyTierInstance
             }
         };
 
-        _rpcPort = GetTcpAvailablePort();
+        _rpcPort = NetworkHelper.GetTcpAvailablePort();
         DebugHelper.WriteLine($"EasyTier RPC 端口: {_rpcPort}");
     }
 
@@ -54,7 +54,8 @@ internal sealed class EasyTierInstance
 
     public void Stop()
     {
-        _process!.Kill();
+        _process?.Kill();
+        _process?.Exited -= Exited;
     }
 
     private async Task<string> BuildArgumentsAsync(EasyTierStartInfo startInfo, CancellationToken cancellationToken = default)
@@ -79,6 +80,7 @@ internal sealed class EasyTierInstance
             .Add("network-name", startInfo.NetworkName)
             .Add("network-secret", startInfo.NetworkSecret)
             //.Add("relay-network-whitelist", startInfo.NetworkName)
+            .AddFlag("--p2p-only")
             .AddIf(startInfo.MachineId is not null, "machine-id", startInfo.MachineId!)
             .Add("rpc-portal", _rpcPort.ToString())
             .Add("hostname", startInfo.HostName)
@@ -195,7 +197,7 @@ internal sealed class EasyTierInstance
 
     internal async Task<ushort> SetPortForwardAsync(IPAddress targetIp, ushort targetPort)
     {
-        var localPort = GetTcpAvailablePort();
+        var localPort = NetworkHelper.GetTcpAvailablePort();
 
         await CallEasyTierCliAsync($"port-forward add tcp 127.0.0.1:{localPort} {targetIp}:{targetPort}", false);
         await CallEasyTierCliAsync($"port-forward add udp 127.0.0.1:{localPort} {targetIp}:{targetPort}", false);
@@ -248,21 +250,9 @@ internal sealed class EasyTierInstance
         return getOutput ? output : null;
     }
 
-    private static ushort GetTcpAvailablePort()
+    public void Dispose()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return (ushort)port;
-    }
-
-    private static ushort GetUdpAvailablePort()
-    {
-        using var client = new UdpClient();
-        client.Client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-        var port = (IPEndPoint)client.Client.LocalEndPoint!;
-        return (ushort)port.Port;
+        _process?.Dispose();
     }
 }
 

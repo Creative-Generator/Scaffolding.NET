@@ -1,7 +1,6 @@
 ﻿using Scaffolding.NET;
 using Scaffolding.NET.EasyTier;
 using Scaffolding.NET.Extensions.MachineId;
-using Scaffolding.NET.Packet;
 
 namespace MinimalClient;
 

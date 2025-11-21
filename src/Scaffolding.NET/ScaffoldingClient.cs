@@ -391,8 +391,12 @@ public sealed class ScaffoldingClient : IAsyncDisposable
 #pragma warning restore CS1998
     {
         if (_isDisposed) return;
-
+        
+        // 释放 TcpClient 和相关资源
+        _tcpClient.GetStream().Dispose();
         _tcpClient.Dispose();
+        
+        // 释放 CancellationTokenSource
 #if NET8_0_OR_GREATER
         if (_heartbeatCts is not null) await _heartbeatCts.CancelAsync();
         if (_pipeCts is not null) await _pipeCts.CancelAsync();
@@ -400,7 +404,17 @@ public sealed class ScaffoldingClient : IAsyncDisposable
         _heartbeatCts?.Cancel();
         _pipeCts?.Cancel();
 #endif
+        _heartbeatCts?.Dispose();
+        _pipeCts?.Dispose();
+        
+        // 释放 EasyTierInstance
         _easyTierInstance.Stop();
+        _easyTierInstance.Dispose();
+        
+        // 完成 Pipe
+        await _pipe.Reader.CompleteAsync();
+        await _pipe.Writer.CompleteAsync();
+        
         _isDisposed = true;
 
         Disposed?.Invoke(this, EventArgs.Empty);
