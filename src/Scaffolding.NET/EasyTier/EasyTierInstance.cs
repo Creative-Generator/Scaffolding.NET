@@ -34,8 +34,9 @@ internal sealed class EasyTierInstance : IDisposable
             {
                 FileName = Path.Combine(_fileInfo.EasyTierFolderPath, _fileInfo.EasyTierCoreName),
                 WorkingDirectory = _fileInfo.EasyTierFolderPath,
-                UseShellExecute = false,
-                CreateNoWindow = true
+                // UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
             }
         };
 
@@ -80,7 +81,7 @@ internal sealed class EasyTierInstance : IDisposable
             .Add("network-name", startInfo.NetworkName)
             .Add("network-secret", startInfo.NetworkSecret)
             //.Add("relay-network-whitelist", startInfo.NetworkName)
-            .AddFlag("--p2p-only")
+            .AddFlag("p2p-only")
             .AddIf(startInfo.MachineId is not null, "machine-id", startInfo.MachineId!)
             .Add("rpc-portal", _rpcPort.ToString())
             .Add("hostname", startInfo.HostName)
@@ -141,7 +142,13 @@ internal sealed class EasyTierInstance : IDisposable
 
     internal static async Task<List<string>> GetEasyTierNodesAsync(CancellationToken cancellationToken = default)
     {
-        List<string> officialNodes = ["tcp://public.easytier.cn:11010", "tcp://public2.easytier.cn:54321"];
+        List<string> officialNodes =
+        [
+            "tcp://public.easytier.cn:11010",
+            "tcp://public2.easytier.cn:54321", 
+            "https://etnode.zkitefly.eu.org/node1",
+            "https://etnode.zkitefly.eu.org/node2"
+        ];
         var nodes = new List<string>(7);
         nodes.AddRange(officialNodes);
         
